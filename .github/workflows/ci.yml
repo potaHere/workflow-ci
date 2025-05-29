@@ -33,7 +33,7 @@ jobs:
         mlflow run . --no-conda -P n_estimators=100 -P max_depth=20
     
     - name: Upload model artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: model-artifacts
         path: |
@@ -50,7 +50,7 @@ jobs:
       uses: actions/checkout@v3
       
     - name: Download model artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: model-artifacts
         path: Workflow-CI/MLProject/models/
