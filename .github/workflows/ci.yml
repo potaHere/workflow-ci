@@ -25,13 +25,11 @@ jobs:
     - name: Install MLflow and Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install mlflow
-        pip install -r Workflow-CI/MLProject/conda.yaml --use-feature=2020-resolver
-    
+        pip install mlflow scikit-learn pandas numpy matplotlib seaborn
+      
     - name: Train Model with MLflow Project
-      working-directory: ./Workflow-CI
+      working-directory: ./Workflow-CI/MLProject
       run: |
-        cd MLProject
         mlflow run . --no-conda -P n_estimators=100 -P max_depth=20
     
     - name: Upload model artifacts
