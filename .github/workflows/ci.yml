@@ -1,270 +1,275 @@
-name: MLflow Model Training CI
+name: MLflow Model Training and Deployment
 
-# Trigger workflow
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # Memungkinkan trigger manual
+    branches: [ main, master ]
+  workflow_dispatch:
     inputs:
       n_estimators:
-        description: 'Number of trees in Random Forest'
+        description: 'Number of estimators for Random Forest'
         required: false
         default: '100'
-        type: string
       max_depth:
         description: 'Maximum depth of trees'
         required: false
         default: '20'
-        type: string
-      min_samples_split:
-        description: 'Minimum samples required to split a node'
-        required: false
-        default: '5'
-        type: string
-      min_samples_leaf:
-        description: 'Minimum samples required at leaf node'
-        required: false
-        default: '2'
-        type: string
+
+env:
+  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
+  MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
 
 jobs:
   model-training:
     runs-on: ubuntu-latest
     
     steps:
-    # Step 1: Checkout repository
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    # Step 2: Setup Python environment
-    - name: Setup Python
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
         
-    # Step 3: Setup Miniconda untuk MLflow Project
-    - name: Setup Miniconda
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+        
+    - name: Install MLflow and dependencies
+      run: |
+        pip install mlflow>=2.0.0
+        pip install conda-pack
+        pip install docker
+        
+    - name: Set up Conda
       uses: conda-incubator/setup-miniconda@v3
       with:
         auto-update-conda: true
         python-version: '3.10'
-        environment-file: MLProject/conda.yaml
-        activate-environment: avocado_ripeness_env
         
-    # Step 4: Install MLflow
-    - name: Install MLflow
-      shell: bash -l {0}
+    - name: Install MLflow Project dependencies
+      working-directory: ./MLProject
       run: |
+        conda env create -f conda.yaml
         conda activate avocado_ripeness_env
-        pip install mlflow
         
-    # Step 5: Setup MLflow tracking server (optional - menggunakan local filesystem)
-    - name: Setup MLflow tracking
-      shell: bash -l {0}
+    - name: Run MLflow Project
+      working-directory: ./MLProject
       run: |
-        export MLFLOW_TRACKING_URI=file://$(pwd)/mlruns
-        echo "MLFLOW_TRACKING_URI=file://$(pwd)/mlruns" >> $GITHUB_ENV
-        
-    # Step 6: Validate dataset exists
-    - name: Check dataset availability
-      run: |
-        if [ ! -f "MLProject/avocado_ripeness_dataset_preprocessed.csv" ]; then
-          echo "Dataset not found!"
-          exit 1
-        fi
-        echo "Dataset found successfully"
-        
-    # Step 7: Run MLflow Project untuk training
-    - name: Run MLflow Project Training
-      shell: bash -l {0}
-      run: |
-        conda activate avocado_ripeness_env
-        cd MLProject
-        
-        # Set parameters dari input atau default
+        # Set default parameters if not provided via workflow_dispatch
         N_ESTIMATORS=${{ github.event.inputs.n_estimators || '100' }}
         MAX_DEPTH=${{ github.event.inputs.max_depth || '20' }}
-        MIN_SAMPLES_SPLIT=${{ github.event.inputs.min_samples_split || '5' }}
-        MIN_SAMPLES_LEAF=${{ github.event.inputs.min_samples_leaf || '2' }}
         
-        echo "Training with parameters:"
-        echo "n_estimators: $N_ESTIMATORS"
-        echo "max_depth: $MAX_DEPTH"
-        echo "min_samples_split: $MIN_SAMPLES_SPLIT"
-        echo "min_samples_leaf: $MIN_SAMPLES_LEAF"
+        echo "Training model with parameters:"
+        echo "  - n_estimators: $N_ESTIMATORS"
+        echo "  - max_depth: $MAX_DEPTH"
         
         # Run MLflow project
         mlflow run . \
           -P n_estimators=$N_ESTIMATORS \
           -P max_depth=$MAX_DEPTH \
-          -P min_samples_split=$MIN_SAMPLES_SPLIT \
-          -P min_samples_leaf=$MIN_SAMPLES_LEAF
+          -P min_samples_split=5 \
+          -P min_samples_leaf=2
           
-    # Step 8: Upload model artifacts
-    - name: Upload MLflow artifacts
+    - name: Generate model artifacts report
+      working-directory: ./MLProject
+      run: |
+        echo "# Model Training Report" > model_report.md
+        echo "Generated on: $(date)" >> model_report.md
+        echo "" >> model_report.md
+        echo "## Parameters Used:" >> model_report.md
+        echo "- n_estimators: ${{ github.event.inputs.n_estimators || '100' }}" >> model_report.md
+        echo "- max_depth: ${{ github.event.inputs.max_depth || '20' }}" >> model_report.md
+        echo "- min_samples_split: 5" >> model_report.md
+        echo "- min_samples_leaf: 2" >> model_report.md
+        echo "" >> model_report.md
+        echo "## Files Generated:" >> model_report.md
+        ls -la *.png *.joblib 2>/dev/null | while read line; do echo "- $line" >> model_report.md; done || true
+        
+    - name: Store model artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: mlflow-artifacts
+        name: model-artifacts-${{ github.run_number }}
         path: |
-          mlruns/
-          MLProject/models/
           MLProject/*.png
+          MLProject/*.joblib
+          MLProject/model_report.md
         retention-days: 30
         
-    # Step 9: Generate training report
-    - name: Generate Training Report
-      shell: bash -l {0}
-      run: |
-        conda activate avocado_ripeness_env
-        cd MLProject
-        
-        echo "# MLflow Training Report - $(date)" > training_report.md
-        echo "" >> training_report.md
-        echo "## Training Parameters" >> training_report.md
-        echo "- N Estimators: ${{ github.event.inputs.n_estimators || '100' }}" >> training_report.md
-        echo "- Max Depth: ${{ github.event.inputs.max_depth || '20' }}" >> training_report.md
-        echo "- Min Samples Split: ${{ github.event.inputs.min_samples_split || '5' }}" >> training_report.md
-        echo "- Min Samples Leaf: ${{ github.event.inputs.min_samples_leaf || '2' }}" >> training_report.md
-        echo "" >> training_report.md
-        echo "## Workflow Information" >> training_report.md
-        echo "- Trigger: ${{ github.event_name }}" >> training_report.md
-        echo "- Branch: ${{ github.ref_name }}" >> training_report.md
-        echo "- Commit: ${{ github.sha }}" >> training_report.md
-        echo "- Timestamp: $(date)" >> training_report.md
-        
-        # Cari experiment terbaru
-        if [ -d "../mlruns" ]; then
-          echo "" >> training_report.md
-          echo "## MLflow Experiments" >> training_report.md
-          echo "MLflow experiments have been logged successfully." >> training_report.md
-          echo "Check the artifacts for detailed metrics and model files." >> training_report.md
-        fi
-        
-    # Step 10: Upload training report
-    - name: Upload Training Report
-      uses: actions/upload-artifact@v4
+  docker-build-deploy:
+    needs: model-training
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
       with:
-        name: training-report
-        path: MLProject/training_report.md
-        retention-days: 30
+        python-version: '3.10'
         
-    # Step 11: Model validation (optional)
-    - name: Basic Model Validation
-      shell: bash -l {0}
+    - name: Install MLflow
       run: |
-        conda activate avocado_ripeness_env
-        cd MLProject
-        
-        # Check if model files were created
-        if [ -d "models" ] && [ "$(ls -A models)" ]; then
-          echo "✅ Model files created successfully"
-          ls -la models/
-        else
-          echo "❌ No model files found"
-          exit 1
-        fi
-        
-        # Check MLflow runs
-        if [ -d "../mlruns" ] && [ "$(ls -A ../mlruns)" ]; then
-          echo "✅ MLflow experiments logged successfully"
-        else
-          echo "❌ No MLflow experiments found"
-          exit 1
-        fi
-        
-    # Step 12: Build and Push Docker Image to Docker Hub
-    - name: Build MLflow Docker Image
-      shell: bash -l {0}
-      run: |
-        conda activate avocado_ripeness_env
-        cd MLProject
-        
-        # Install docker dependencies
+        pip install mlflow>=2.0.0
         pip install docker
         
-        # Build docker image using MLflow
-        mlflow models build-docker \
-          --model-uri "models:/avocado_ripeness_model/latest" \
-          --name "avocado-ripeness-model" \
-          --install-mlflow || echo "Building from run artifacts instead..."
-        
-        # Alternative: Build from local model artifacts
-        if [ -d "models" ]; then
-          echo "Building Docker image from local model artifacts..."
-          # Get the latest model directory
-          LATEST_MODEL=$(ls -t models/ | head -n1)
-          if [ ! -z "$LATEST_MODEL" ]; then
-            mlflow models build-docker \
-              --model-uri "models/$LATEST_MODEL" \
-              --name "avocado-ripeness-model" \
-              --install-mlflow
-          fi
-        fi
-        
-    # Step 13: Login to Docker Hub
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
     - name: Login to Docker Hub
       uses: docker/login-action@v3
       with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_PASSWORD }}
         
-    # Step 14: Tag and Push Docker Image
-    - name: Tag and Push Docker Image
-      shell: bash -l {0}
+    - name: Download model artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: model-artifacts-${{ github.run_number }}
+        path: ./MLProject/
+        
+    - name: Build Docker image with MLflow
+      working-directory: ./MLProject
       run: |
-        # Get Docker Hub username from secrets
-        DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+        # Create a simple model serving script for Docker
+        cat > serve_model.py << 'EOF'
+        import mlflow
+        import mlflow.sklearn
+        import pandas as pd
+        import joblib
+        import os
+        from flask import Flask, request, jsonify
         
-        # Tag the image
-        docker tag avocado-ripeness-model:latest $DOCKERHUB_USERNAME/avocado-ripeness-model:latest
-        docker tag avocado-ripeness-model:latest $DOCKERHUB_USERNAME/avocado-ripeness-model:v$(date +%Y%m%d-%H%M%S)
+        app = Flask(__name__)
         
-        # Push to Docker Hub
-        docker push $DOCKERHUB_USERNAME/avocado-ripeness-model:latest
-        docker push $DOCKERHUB_USERNAME/avocado-ripeness-model:v$(date +%Y%m%d-%H%M%S)
+        # Load the model
+        model_path = "random_forest_model.joblib"
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+        else:
+            model = None
         
-        echo "✅ Docker image pushed successfully!"
-        echo "🐳 Image: $DOCKERHUB_USERNAME/avocado-ripeness-model:latest"
+        @app.route('/predict', methods=['POST'])
+        def predict():
+            if model is None:
+                return jsonify({"error": "Model not loaded"}), 500
+                
+            try:
+                data = request.json
+                df = pd.DataFrame([data])
+                prediction = model.predict(df)
+                probability = model.predict_proba(df)
+                
+                return jsonify({
+                    "prediction": prediction[0],
+                    "probability": probability[0].tolist()
+                })
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
         
-    # Step 15: Update Training Report with Docker Info
-    - name: Update Training Report with Docker Info
-      shell: bash -l {0}
+        @app.route('/health', methods=['GET'])
+        def health():
+            return jsonify({"status": "healthy", "model_loaded": model is not None})
+        
+        if __name__ == '__main__':
+            app.run(host='0.0.0.0', port=5000)
+        EOF
+        
+        # Create Dockerfile
+        cat > Dockerfile << 'EOF'
+        FROM python:3.10-slim
+        
+        WORKDIR /app
+        
+        COPY conda.yaml .
+        COPY *.py .
+        COPY *.joblib .
+        COPY *.csv .
+        
+        RUN pip install mlflow>=2.0.0 flask pandas scikit-learn joblib numpy
+        
+        EXPOSE 5000
+        
+        CMD ["python", "serve_model.py"]
+        EOF
+        
+        # Build and push Docker image
+        docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:latest .
+        docker push ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:latest
+        
+        # Also tag with build number
+        docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:latest \
+                   ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
+        docker push ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
+        
+    - name: Update Docker Hub link
       run: |
-        conda activate avocado_ripeness_env
-        cd MLProject
+        echo "https://hub.docker.com/r/${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model" > MLProject/docker-hub-link.txt
+        echo "Latest build: build-${{ github.run_number }}" >> MLProject/docker-hub-link.txt
         
-        DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+    - name: Commit updated Docker link
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add MLProject/docker-hub-link.txt
+        git diff --staged --quiet || git commit -m "Update Docker Hub link with build-${{ github.run_number }}"
+        git push || true
         
-        echo "" >> training_report.md
-        echo "## Docker Image" >> training_report.md
-        echo "- Docker Hub Repository: $DOCKERHUB_USERNAME/avocado-ripeness-model" >> training_report.md
-        echo "- Latest Tag: latest" >> training_report.md
-        echo "- Versioned Tag: v$(date +%Y%m%d-%H%M%S)" >> training_report.md
-        echo "- Pull Command: \`docker pull $DOCKERHUB_USERNAME/avocado-ripeness-model:latest\`" >> training_report.md
-        echo "" >> training_report.md
-        echo "### Usage" >> training_report.md
-        echo "\`\`\`bash" >> training_report.md
-        echo "# Pull and run the model container" >> training_report.md
-        echo "docker pull $DOCKERHUB_USERNAME/avocado-ripeness-model:latest" >> training_report.md
-        echo "docker run -p 8080:8080 $DOCKERHUB_USERNAME/avocado-ripeness-model:latest" >> training_report.md
-        echo "\`\`\`" >> training_report.md
-        
-  # Job untuk notifikasi (optional)
-  notify-completion:
+  create-release:
+    needs: [model-training, docker-build-deploy]
     runs-on: ubuntu-latest
-    needs: model-training
-    if: always()
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     
     steps:
-    - name: Training Status
-      run: |
-        if [[ "${{ needs.model-training.result }}" == "success" ]]; then
-          echo "🎉 Model training completed successfully!"
-          echo "✅ Status: SUCCESS"
-        else
-          echo "❌ Model training failed!"
-          echo "❌ Status: FAILED"
-          exit 1
-        fi
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Download model artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: model-artifacts-${{ github.run_number }}
+        path: ./artifacts/
+        
+    - name: Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: model-v${{ github.run_number }}
+        release_name: Model Release v${{ github.run_number }}
+        body: |
+          ## Avocado Ripeness Classification Model
+          
+          **Build:** ${{ github.run_number }}
+          **Date:** $(date)
+          **Commit:** ${{ github.sha }}
+          
+          ### Model Parameters:
+          - n_estimators: ${{ github.event.inputs.n_estimators || '100' }}
+          - max_depth: ${{ github.event.inputs.max_depth || '20' }}
+          - min_samples_split: 5
+          - min_samples_leaf: 2
+          
+          ### Docker Image:
+          ```bash
+          docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
+          ```
+          
+          ### Usage:
+          ```bash
+          # Run the model server
+          docker run -p 5000:5000 ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
+          
+          # Test prediction
+          curl -X POST http://localhost:5000/predict \
+            -H "Content-Type: application/json" \
+            -d '{"feature1": value1, "feature2": value2, ...}'
+          ```
+        draft: false
+        prerelease: false
