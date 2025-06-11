@@ -1,0 +1,7 @@
+README.md
+SECRETS_SETUP.md
+TROUBLESHOOTING.md
+MLProject/modelling_fixed.py
+MLProject/modelling_backup.py
+MLProject/random_forest_model.joblib
+MLProject/test_local.sh

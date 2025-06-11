@@ -44,22 +44,25 @@ jobs:
         pip install mlflow>=2.0.0
         pip install conda-pack
         pip install docker
-        
-    - name: Set up Conda
+          - name: Set up Conda
       uses: conda-incubator/setup-miniconda@v3
       with:
         auto-update-conda: true
         python-version: '3.10'
+        conda-remove-defaults: true
         
-    - name: Install MLflow Project dependencies
+    - name: Create conda environment
       working-directory: ./MLProject
       run: |
-        conda env create -f conda.yaml
-        conda activate avocado_ripeness_env
+        conda env create -f conda.yaml --force
         
     - name: Run MLflow Project
       working-directory: ./MLProject
+      shell: bash -l {0}
       run: |
+        # Activate environment
+        conda activate avocado_ripeness_env
+        
         # Set default parameters if not provided via workflow_dispatch
         N_ESTIMATORS=${{ github.event.inputs.n_estimators || '100' }}
         MAX_DEPTH=${{ github.event.inputs.max_depth || '20' }}
@@ -68,16 +71,18 @@ jobs:
         echo "  - n_estimators: $N_ESTIMATORS"
         echo "  - max_depth: $MAX_DEPTH"
         
-        # Run MLflow project
-        mlflow run . \
-          -P n_estimators=$N_ESTIMATORS \
-          -P max_depth=$MAX_DEPTH \
-          -P min_samples_split=5 \
-          -P min_samples_leaf=2
-          
-    - name: Generate model artifacts report
+        # Run MLflow project using python directly
+        python modelling.py \
+          --n_estimators $N_ESTIMATORS \
+          --max_depth $MAX_DEPTH \
+          --min_samples_split 5 \
+          --min_samples_leaf 2
+            - name: Generate model artifacts report
       working-directory: ./MLProject
+      shell: bash -l {0}
       run: |
+        conda activate avocado_ripeness_env
+        
         echo "# Model Training Report" > model_report.md
         echo "Generated on: $(date)" >> model_report.md
         echo "" >> model_report.md
@@ -88,7 +93,7 @@ jobs:
         echo "- min_samples_leaf: 2" >> model_report.md
         echo "" >> model_report.md
         echo "## Files Generated:" >> model_report.md
-        ls -la *.png *.joblib 2>/dev/null | while read line; do echo "- $line" >> model_report.md; done || true
+        ls -la *.png *.joblib 2>/dev/null | while read line; do echo "- $line" >> model_report.md; done || echo "- No artifacts found" >> model_report.md
         
     - name: Store model artifacts
       uses: actions/upload-artifact@v4
