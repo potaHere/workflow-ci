@@ -1,0 +1,1 @@
+https://hub.docker.com/repository/docker/potadoc/avocado-ripeness-model/general
