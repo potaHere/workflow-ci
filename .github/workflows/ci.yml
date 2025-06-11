@@ -28,7 +28,7 @@ jobs:
         pip install mlflow scikit-learn pandas numpy matplotlib seaborn
       
     - name: Train Model with MLflow Project
-      working-directory: ${{ github.workspace }}/Workflow-CI/MLProject
+      working-directory: ../Workflow-CI/MLProject
       run: |
         mlflow run . --no-conda -P n_estimators=100 -P max_depth=20
     
@@ -64,9 +64,15 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     
-    - name: Build and push
-      uses: docker/build-push-action@v3
-      with:
-        context: ./Workflow-CI/MLProject
-        push: true
-        tags: potadoc/avocado-ripeness-model:latest,potadoc/avocado-ripeness-model:${{ github.sha }}
+    - name: Build Docker with MLflow
+      working-directory: Workflow-CI/MLProject
+      run: |
+        mlflow models build-docker \
+          --model-uri ./models/ \
+          --name potadoc/avocado-ripeness-model:latest
+    
+    - name: Tag and Push Docker Image
+      run: |
+        docker tag potadoc/avocado-ripeness-model:latest potadoc/avocado-ripeness-model:${{ github.sha }}
+        docker push potadoc/avocado-ripeness-model:latest
+        docker push potadoc/avocado-ripeness-model:${{ github.sha }}
