@@ -38,13 +38,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
-        
-    - name: Install MLflow and dependencies
+          - name: Install MLflow and dependencies
       run: |
         pip install mlflow>=2.0.0
         pip install conda-pack
         pip install docker
-          - name: Set up Conda
+        
+    - name: Set up Conda
       uses: conda-incubator/setup-miniconda@v3
       with:
         auto-update-conda: true
@@ -70,14 +70,14 @@ jobs:
         echo "Training model with parameters:"
         echo "  - n_estimators: $N_ESTIMATORS"
         echo "  - max_depth: $MAX_DEPTH"
-        
-        # Run MLflow project using python directly
+          # Run MLflow project using python directly
         python modelling.py \
           --n_estimators $N_ESTIMATORS \
           --max_depth $MAX_DEPTH \
           --min_samples_split 5 \
           --min_samples_leaf 2
-            - name: Generate model artifacts report
+          
+    - name: Generate model artifacts report
       working-directory: ./MLProject
       shell: bash -l {0}
       run: |
@@ -210,7 +210,7 @@ jobs:
         
         # Also tag with build number
         docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:latest \
-                   ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
+                  ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
         docker push ${{ secrets.DOCKER_HUB_USERNAME }}/avocado-ripeness-model:build-${{ github.run_number }}
         
     - name: Update Docker Hub link
