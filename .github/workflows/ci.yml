@@ -163,9 +163,12 @@ jobs:
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
       shell: bash -l {0}
       run: |
-        # Configure git
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        # Configure git with token-based authentication
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        
+        # Use token for authentication
+        git remote set-url origin https://${{ github.token }}@github.com/${{ github.repository }}.git
         
         # Create artifacts branch if it doesn't exist
         git fetch origin
