@@ -29,7 +29,6 @@ on:
         type: string
 
 env:
-  MLFLOW_TRACKING_URI: sqlite:///mlflow.db
   DOCKER_IMAGE_NAME: avocado-ripeness-model
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
   DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
@@ -120,9 +119,10 @@ jobs:
         rm -f mlflow.db
         rm -rf mlruns
         
-        # Set MLflow tracking URI (database will be created automatically on first run)
+        # Set MLflow tracking URI with absolute path (database will be created automatically on first run)
         echo "🗄️ Setting up MLflow tracking..."
-        export MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+        MLFLOW_DB_PATH="$(pwd)/mlflow.db"
+        export MLFLOW_TRACKING_URI="sqlite:///$MLFLOW_DB_PATH"
         
         # Verify MLflow configuration
         echo "✅ MLflow tracking URI set to: $MLFLOW_TRACKING_URI"
@@ -142,9 +142,9 @@ jobs:
         
         echo "✅ All required files present"
         
-        # Run the MLflow project with error handling
+        # Run the MLflow project with error handling and explicit tracking URI
         echo "🚀 Starting MLflow run..."
-        mlflow run . \
+        MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" mlflow run . \
           -P n_estimators=$N_ESTIMATORS \
           -P max_depth=$MAX_DEPTH \
           -P min_samples_split=$MIN_SAMPLES_SPLIT \
@@ -167,15 +167,24 @@ jobs:
             fi
             echo "🔍 MLflow version:"
             mlflow --version
+            echo "🔍 Tracking URI:"
+            echo "MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI"
             exit 1
           }
         
         echo "✅ MLflow run completed successfully"
         
+        # Export the tracking URI for subsequent steps
+        echo "MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI" >> $GITHUB_ENV
+        
     - name: Build Docker Image with MLflow
       shell: bash -l {0}
       working-directory: ./MLProject
       run: |
+        # Set the tracking URI for this step
+        MLFLOW_DB_PATH="$(pwd)/mlflow.db"
+        export MLFLOW_TRACKING_URI="sqlite:///$MLFLOW_DB_PATH"
+        
         # Verify MLflow runs exist
         if [ ! -d "mlruns" ]; then
           echo "❌ Error: No MLflow runs found!"
@@ -216,7 +225,7 @@ jobs:
         # Build Docker image using mlflow build-docker with error handling
         echo "🐳 Building Docker image..."
         
-        if mlflow models build-docker \
+        if MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" mlflow models build-docker \
           -m "$MODEL_PATH" \
           -n "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" \
           --enable-mlserver; then
@@ -226,7 +235,7 @@ jobs:
           echo "🔍 Checking model artifacts..."
           
           # Try to list model artifacts for debugging
-          mlflow artifacts list -u "$MODEL_PATH" 2>/dev/null || echo "Could not list model artifacts"
+          MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" mlflow artifacts list -u "$MODEL_PATH" 2>/dev/null || echo "Could not list model artifacts"
           
           # Check if model directory exists in mlruns
           if [ -d "mlruns" ]; then
@@ -284,6 +293,10 @@ jobs:
       shell: bash -l {0}
       working-directory: ./MLProject
       run: |
+        # Set the tracking URI for this step
+        MLFLOW_DB_PATH="$(pwd)/mlflow.db"
+        export MLFLOW_TRACKING_URI="sqlite:///$MLFLOW_DB_PATH"
+        
         # Create artifacts directory
         mkdir -p ../artifacts
         
@@ -292,7 +305,7 @@ jobs:
         
         # Method 1: Try with mlflow CLI and jq
         if command -v mlflow >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-          RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json 2>/dev/null | jq -r '.[0].run_id' 2>/dev/null || echo "")
+          RUN_ID=$(MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json 2>/dev/null | jq -r '.[0].run_id' 2>/dev/null || echo "")
         fi
         
         # Method 2: Fallback to filesystem search
@@ -315,6 +328,11 @@ jobs:
           cp -r mlruns ../artifacts/
         fi
         
+        # Copy database
+        if [ -f "mlflow.db" ]; then
+          cp mlflow.db ../artifacts/
+        fi
+        
         # Copy any generated plots or additional files
         if [ -f "confusion_matrix.png" ]; then
           cp confusion_matrix.png ../artifacts/
@@ -331,6 +349,7 @@ jobs:
         echo "Timestamp: $(date)" >> ../artifacts/run_summary.txt
         echo "Commit SHA: ${{ github.sha }}" >> ../artifacts/run_summary.txt
         echo "Docker Image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}" >> ../artifacts/run_summary.txt
+        echo "MLflow Tracking URI: $MLFLOW_TRACKING_URI" >> ../artifacts/run_summary.txt
         
         # List artifacts
         echo "Generated artifacts:" >> ../artifacts/run_summary.txt
