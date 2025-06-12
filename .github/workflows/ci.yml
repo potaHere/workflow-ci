@@ -37,6 +37,10 @@ env:
 jobs:
   mlflow-training:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      actions: read
     
     steps:
     - name: Checkout code
@@ -53,11 +57,10 @@ jobs:
         auto-update-conda: true
         python-version: '3.10'
         miniforge-variant: Mambaforge
-        
-    - name: Install MLflow
+          - name: Install MLflow and Dependencies
       shell: bash -l {0}
       run: |
-        conda install -c conda-forge mlflow
+        conda install -c conda-forge mlflow jq
         pip install mlflow[extras]
         
     - name: Install Docker
@@ -92,58 +95,94 @@ jobs:
           -P min_samples_split=$MIN_SAMPLES_SPLIT \
           -P min_samples_leaf=$MIN_SAMPLES_LEAF \
           --env-manager conda
-          
-    - name: Build Docker Image with MLflow
+            - name: Build Docker Image with MLflow
       shell: bash -l {0}
       working-directory: ./MLProject
       run: |
-        # Get the latest run ID
-        RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json | jq -r '.[0].run_id')
+        # Get the latest run ID with better error handling
+        echo "Fetching latest MLflow run..."
+        RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json | jq -r '.[0].run_id // empty')
+        
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "❌ Error: No MLflow run found. Cannot build Docker image."
+          echo "Available experiments:"
+          mlflow experiments list
+          exit 1
+        fi
+        
         echo "Latest run ID: $RUN_ID"
         
+        # Verify model exists
+        if ! mlflow models list --experiment-name "Avocado_Ripeness_Classification" | grep -q "$RUN_ID"; then
+          echo "❌ Error: Model not found for run $RUN_ID"
+          exit 1
+        fi
+        
         # Build Docker image using mlflow build-docker
+        echo "Building Docker image..."
         mlflow models build-docker \
           -m "runs:/$RUN_ID/model" \
-          -n "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" \
+          -n "${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest" \
           --enable-mlserver
-          
-    - name: Tag and Push Docker Image
+            - name: Tag and Push Docker Image
       shell: bash -l {0}
       run: |
+        # Verify image exists before tagging
+        if ! docker images "${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest" --format "table {{.Repository}}:{{.Tag}}" | grep -q "latest"; then
+          echo "❌ Error: Docker image ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest not found"
+          echo "Available images:"
+          docker images
+          exit 1
+        fi
+        
         # Tag with commit SHA
-        docker tag "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        docker tag "${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest" "${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:${{ github.sha }}"
         
         # Push both tags
-        docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
-        docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        echo "Pushing latest tag..."
+        docker push "${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest"
+        
+        echo "Pushing SHA tag..."
+        docker push "${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:${{ github.sha }}"
         
         echo "Docker images pushed successfully!"
-        echo "Latest: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
-        echo "SHA: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
-        
-    - name: Save Model Artifacts
+        echo "Latest: ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest"
+        echo "SHA: ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:${{ github.sha }}"
+          - name: Save Model Artifacts
       shell: bash -l {0}
       working-directory: ./MLProject
       run: |
         # Create artifacts directory
         mkdir -p ../artifacts
         
-        # Get the latest run ID and copy artifacts
-        RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json | jq -r '.[0].run_id')
-        echo "Copying artifacts from run: $RUN_ID"
+        # Get the latest run ID and copy artifacts with error handling
+        echo "Fetching latest MLflow run for artifacts..."
+        RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json | jq -r '.[0].run_id // empty')
         
-        # Copy MLflow artifacts
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "❌ Warning: No MLflow run found for artifacts"
+          RUN_ID="unknown"
+        else
+          echo "Copying artifacts from run: $RUN_ID"
+        fi
+        
+        # Copy MLflow artifacts if they exist
         if [ -d "mlruns" ]; then
           cp -r mlruns ../artifacts/
+          echo "✅ MLflow runs copied"
+        else
+          echo "⚠️ Warning: mlruns directory not found"
         fi
         
         # Copy any generated plots or additional files
         if [ -f "confusion_matrix.png" ]; then
           cp confusion_matrix.png ../artifacts/
+          echo "✅ Confusion matrix copied"
         fi
         
         if [ -f "feature_importance.png" ]; then
           cp feature_importance.png ../artifacts/
+          echo "✅ Feature importance plot copied"
         fi
         
         # Create a summary file
@@ -152,7 +191,7 @@ jobs:
         echo "Run ID: $RUN_ID" >> ../artifacts/run_summary.txt
         echo "Timestamp: $(date)" >> ../artifacts/run_summary.txt
         echo "Commit SHA: ${{ github.sha }}" >> ../artifacts/run_summary.txt
-        echo "Docker Image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}" >> ../artifacts/run_summary.txt
+        echo "Docker Image: ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:${{ github.sha }}" >> ../artifacts/run_summary.txt
         
         # List artifacts
         echo "Generated artifacts:" >> ../artifacts/run_summary.txt
@@ -164,8 +203,7 @@ jobs:
         name: mlflow-artifacts-${{ github.sha }}
         path: artifacts/
         retention-days: 30
-        
-    - name: Commit and Push Artifacts (if on main branch)
+          - name: Commit and Push Artifacts (if on main branch)
       if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
       shell: bash -l {0}
       run: |
@@ -173,38 +211,54 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         
+        # Set git safe directory (security fix)
+        git config --global --add safe.directory /github/workspace
+        
         # Create artifacts branch if it doesn't exist
-        git fetch origin
-        if git show-ref --verify --quiet refs/remotes/origin/artifacts; then
+        git fetch origin || echo "Failed to fetch, continuing..."
+        
+        # Check if artifacts branch exists remotely
+        if git ls-remote --exit-code --heads origin artifacts; then
+          echo "Artifacts branch exists, checking out..."
           git checkout artifacts
           git pull origin artifacts
         else
+          echo "Creating new artifacts branch..."
           git checkout --orphan artifacts
-          git rm -rf .
+          git rm -rf . || echo "No files to remove"
         fi
         
-        # Copy artifacts
-        cp -r artifacts/* . 2>/dev/null || :
-        
-        # Add timestamp directory
-        TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-        mkdir -p "runs/$TIMESTAMP"
-        cp -r artifacts/* "runs/$TIMESTAMP/" 2>/dev/null || :
+        # Ensure artifacts directory exists
+        if [ -d "artifacts" ]; then
+          # Copy artifacts
+          cp -r artifacts/* . 2>/dev/null || echo "No artifacts to copy"
+          
+          # Add timestamp directory
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          mkdir -p "runs/$TIMESTAMP"
+          cp -r artifacts/* "runs/$TIMESTAMP/" 2>/dev/null || echo "No artifacts for timestamp directory"
+        else
+          echo "⚠️ Warning: artifacts directory not found"
+          mkdir -p artifacts
+          echo "No artifacts generated in this run" > artifacts/empty_run.txt
+        fi
         
         # Commit and push
-        git add .
-        git commit -m "Add MLflow artifacts from run ${{ github.sha }}" || echo "No changes to commit"
-        git push origin artifacts
-        
-    - name: Update Docker Hub Link
+        git add . || echo "Nothing to add"
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Add MLflow artifacts from run ${{ github.sha }}"
+          git push origin artifacts || echo "Failed to push artifacts"
+        fi
+          - name: Update Docker Hub Link
       shell: bash -l {0}
       run: |
         # Update the docker-hub-link.txt with the new image
-        echo "https://hub.docker.com/repository/docker/$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME" > MLProject/docker-hub-link.txt
-        echo "Latest image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" >> MLProject/docker-hub-link.txt
-        echo "SHA image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}" >> MLProject/docker-hub-link.txt
-        
-    - name: Display Run Summary
+        echo "https://hub.docker.com/repository/docker/${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}" > MLProject/docker-hub-link.txt
+        echo "Latest image: ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest" >> MLProject/docker-hub-link.txt
+        echo "SHA image: ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:${{ github.sha }}" >> MLProject/docker-hub-link.txt
+          - name: Display Run Summary
       shell: bash -l {0}
       run: |
         echo "🎉 MLflow CI/CD Pipeline Completed Successfully!"
@@ -214,10 +268,10 @@ jobs:
         echo "✅ Artifacts saved to GitHub repository"
         echo ""
         echo "📊 Run Details:"
-        echo "Docker Image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+        echo "Docker Image: ${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest"
         echo "Commit SHA: ${{ github.sha }}"
         echo "Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         echo ""
         echo "🔗 Resources:"
-        echo "- Docker Hub: https://hub.docker.com/repository/docker/$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME"
+        echo "- Docker Hub: https://hub.docker.com/repository/docker/${DOCKER_HUB_USERNAME}/${DOCKER_IMAGE_NAME}"
         echo "- Artifacts: Available in GitHub Actions artifacts and 'artifacts' branch"
