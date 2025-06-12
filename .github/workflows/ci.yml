@@ -120,15 +120,13 @@ jobs:
         rm -f mlflow.db
         rm -rf mlruns
         
-        # Initialize MLflow tracking database with current schema
-        echo "🗄️ Initializing MLflow database..."
+        # Set MLflow tracking URI (database will be created automatically on first run)
+        echo "🗄️ Setting up MLflow tracking..."
         export MLFLOW_TRACKING_URI=sqlite:///mlflow.db
         
-        # Create and upgrade database schema
-        mlflow db upgrade sqlite:///mlflow.db
-        
-        # Verify database is properly initialized
-        echo "✅ Database initialized successfully"
+        # Verify MLflow configuration
+        echo "✅ MLflow tracking URI set to: $MLFLOW_TRACKING_URI"
+        mlflow --version
         
         # Verify dataset exists
         if [ ! -f "avocado_ripeness_dataset_preprocessed.csv" ]; then
@@ -161,7 +159,12 @@ jobs:
             fi
             # Additional debugging: check database state
             echo "🔍 Database status:"
-            file mlflow.db 2>/dev/null || echo "Database file not found"
+            if [ -f "mlflow.db" ]; then
+              echo "Database file exists: $(ls -lh mlflow.db)"
+              file mlflow.db 2>/dev/null || echo "Could not determine file type"
+            else
+              echo "Database file not found"
+            fi
             echo "🔍 MLflow version:"
             mlflow --version
             exit 1
