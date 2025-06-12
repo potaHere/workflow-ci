@@ -53,18 +53,29 @@ jobs:
         auto-update-conda: true
         python-version: '3.10'
         miniforge-variant: Miniforge3
+        channels: conda-forge,nodefaults
+        channel-priority: strict
         
     - name: Install MLflow
       shell: bash -l {0}
       run: |
-        # Update conda and install MLflow with retry mechanism
-        conda update -n base -c defaults conda -y
+        # Configure conda channels explicitly
+        conda config --remove channels defaults || true
+        conda config --add channels conda-forge
+        conda config --set channel_priority strict
+        
+        # Update conda
+        conda update -n base -c conda-forge conda -y
+        
+        # Install system dependencies
+        sudo apt-get update
+        sudo apt-get install -y jq
         
         # Install MLflow with retries
         for i in {1..3}; do
           echo "Attempt $i: Installing MLflow..."
-          if conda install -c conda-forge mlflow -y; then
-            echo "✅ MLflow installed successfully"
+          if conda install -c conda-forge mlflow scikit-learn pandas numpy matplotlib seaborn -y; then
+            echo "✅ MLflow and dependencies installed successfully"
             break
           else
             echo "❌ Attempt $i failed, retrying..."
@@ -72,8 +83,12 @@ jobs:
           fi
         done
         
-        # Install additional MLflow dependencies
-        pip install mlflow[extras] --retry-delay 10 --retries 3
+        # Install additional MLflow dependencies via pip
+        pip install mlflow[extras] --no-cache-dir
+        
+        # Verify installation
+        mlflow --version
+        python -c "import mlflow; print(f'MLflow version: {mlflow.__version__}')"
         
     - name: Install Docker
       uses: docker/setup-buildx-action@v3
@@ -159,13 +174,13 @@ jobs:
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
           echo "🔄 Fallback: Searching mlruns directory..."
           # Find the most recent run directory
-          RUN_ID=$(find mlruns -name "*.yaml" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | awk '{print $2}' | sed 's|.*/\([^/]*\)/meta.yaml|\1|' || echo "")
+          RUN_ID=$(find mlruns -name "meta.yaml" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | awk '{print $2}' | sed 's|.*/\([^/]*\)/meta.yaml|\1|' || echo "")
         fi
         
         if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
           echo "❌ Error: Could not find any MLflow run ID!"
           echo "📁 MLruns directory contents:"
-          find mlruns -type f -name "*.yaml" 2>/dev/null | head -10
+          find mlruns -type f -name "meta.yaml" 2>/dev/null | head -10
           exit 1
         fi
         
@@ -249,8 +264,27 @@ jobs:
         # Create artifacts directory
         mkdir -p ../artifacts
         
-        # Get the latest run ID and copy artifacts
-        RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json | jq -r '.[0].run_id')
+        # Get the latest run ID with better error handling
+        RUN_ID=""
+        
+        # Method 1: Try with mlflow CLI and jq
+        if command -v mlflow >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+          RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json 2>/dev/null | jq -r '.[0].run_id' 2>/dev/null || echo "")
+        fi
+        
+        # Method 2: Fallback to filesystem search
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "🔄 Fallback: Searching mlruns directory..."
+          RUN_ID=$(find mlruns -name "meta.yaml" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | awk '{print $2}' | sed 's|.*/\([^/]*\)/meta.yaml|\1|' || echo "")
+        fi
+        
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "❌ Error: Could not find any MLflow run ID!"
+          echo "📁 MLruns directory contents:"
+          find mlruns -type f -name "meta.yaml" 2>/dev/null | head -10
+          exit 1
+        fi
+        
         echo "Copying artifacts from run: $RUN_ID"
         
         # Copy MLflow artifacts
