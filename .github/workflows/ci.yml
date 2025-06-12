@@ -227,25 +227,75 @@ jobs:
     - name: Update Docker Hub Link
       shell: bash -l {0}
       run: |
-        # Update the docker-hub-link.txt with the new image
+        # Update the docker-hub-link.txt with the actual pushed image
         echo "https://hub.docker.com/repository/docker/$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME" > MLProject/docker-hub-link.txt
         echo "Latest image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" >> MLProject/docker-hub-link.txt
         echo "SHA image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}" >> MLProject/docker-hub-link.txt
+        echo "Build date: $(date)" >> MLProject/docker-hub-link.txt
+        echo "MLflow model URI: runs:/$(grep -o "Training completed! MLflow Run ID: [a-zA-Z0-9]*" MLProject/training.log | cut -d ' ' -f 6 || echo "unknown")/model" >> MLProject/docker-hub-link.txt
         
-    - name: Display Run Summary
+    - name: Build and Push Docker Image using MLflow
+      working-directory: ${{ github.workspace }}/MLProject
+      shell: bash -l {0}
+      run: |
+        # Set the tracking URI for this step
+        MLFLOW_DB_PATH="$(pwd)/mlflow.db"
+        export MLFLOW_TRACKING_URI="sqlite:///$MLFLOW_DB_PATH"
+        
+        # Get the run ID from the previous step
+        RUN_ID=$(grep -o "Training completed! MLflow Run ID: [a-zA-Z0-9]*" training.log | cut -d ' ' -f 6)
+        
+        if [ -z "$RUN_ID" ]; then
+          echo "❌ Error: No Run ID found for Docker build"
+          exit 1
+        fi
+        
+        echo "🐳 Building Docker image for Run ID: $RUN_ID"
+        
+        # Build Docker image using MLflow
+        mlflow models build-docker \
+          --model-uri "runs:/$RUN_ID/model" \
+          --name "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME" \
+          --install-mlflow
+        
+        # Login to Docker Hub
+        echo "🔐 Logging in to Docker Hub..."
+        echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login --username "$DOCKER_HUB_USERNAME" --password-stdin
+        
+        # Tag and push the image with latest tag
+        echo "🏷️ Tagging Docker image..."
+        docker tag "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+        docker tag "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        
+        # Push both tags
+        echo "📤 Pushing Docker images to Docker Hub..."
+        docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+        docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        
+        # Verify push
+        echo "✅ Docker images pushed successfully:"
+        echo "  - $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+        echo "  - $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        
+        # Logout from Docker Hub
+        docker logout
+          - name: Display Run Summary
       shell: bash -l {0}
       run: |
         echo "🎉 MLflow CI/CD Pipeline Completed Successfully!"
         echo "=============================================="
         echo "✅ Model training completed"
-        echo "✅ Docker image built and pushed to Docker Hub"
+        echo "✅ Docker image built using MLflow and pushed to Docker Hub"
         echo "✅ Artifacts saved to GitHub repository"
         echo ""
         echo "📊 Run Details:"
-        echo "Docker Image: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+        echo "Docker Images:"
+        echo "  - Latest: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+        echo "  - SHA: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
         echo "Commit SHA: ${{ github.sha }}"
         echo "Workflow URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         echo ""
         echo "🔗 Resources:"
         echo "- Docker Hub: https://hub.docker.com/repository/docker/$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME"
         echo "- Artifacts: Available in GitHub Actions artifacts and 'artifacts' branch"
+        echo "- MLflow Model: Check artifacts for MLflow tracking database"
