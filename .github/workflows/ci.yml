@@ -36,10 +36,17 @@ env:
 jobs:
   mlflow-training:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        token: ${{ github.token }}
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -164,34 +171,58 @@ jobs:
       shell: bash -l {0}
       run: |
         # Configure git with token-based authentication
-        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
         
-        # Use token for authentication
-        git remote set-url origin https://${{ github.token }}@github.com/${{ github.repository }}.git
+        # Set up authentication using token
+        git config --global url."https://${{ github.token }}@github.com/".insteadOf "https://github.com/"
         
-        # Create artifacts branch if it doesn't exist
-        git fetch origin
-        if git show-ref --verify --quiet refs/remotes/origin/artifacts; then
+        # Navigate to workspace root
+        cd ${{ github.workspace }}
+        
+        # Check if artifacts directory exists
+        if [ ! -d "artifacts" ]; then
+          echo "❌ No artifacts directory found"
+          exit 1
+        fi
+        
+        # Create or switch to artifacts branch
+        git fetch origin || true
+        if git ls-remote --heads origin artifacts | grep -q refs/heads/artifacts; then
+          echo "📁 Artifacts branch exists, checking out..."
           git checkout artifacts
           git pull origin artifacts
         else
+          echo "🆕 Creating new artifacts branch..."
           git checkout --orphan artifacts
-          git rm -rf .
+          git rm -rf . || true
         fi
         
-        # Copy artifacts
-        cp -r artifacts/* . 2>/dev/null || :
+        # Copy artifacts with better error handling
+        if [ -d "artifacts" ]; then
+          cp -r artifacts/* . 2>/dev/null || echo "⚠️  Some artifacts may not have been copied"
+        fi
         
         # Add timestamp directory
         TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
         mkdir -p "runs/$TIMESTAMP"
-        cp -r artifacts/* "runs/$TIMESTAMP/" 2>/dev/null || :
+        if [ -d "artifacts" ]; then
+          cp -r artifacts/* "runs/$TIMESTAMP/" 2>/dev/null || echo "⚠️  Some artifacts may not have been copied to timestamp directory"
+        fi
         
-        # Commit and push
-        git add .
-        git commit -m "Add MLflow artifacts from run ${{ github.sha }}" || echo "No changes to commit"
-        git push origin artifacts
+        # Stage all changes
+        git add . || echo "⚠️  No changes to add"
+        
+        # Check if there are changes to commit
+        if git diff --staged --quiet; then
+          echo "📝 No changes to commit"
+        else
+          echo "📝 Committing artifacts..."
+          git commit -m "Add MLflow artifacts from run ${{ github.sha }}" -m "Timestamp: $(date)" -m "Workflow: ${{ github.workflow }}" -m "Run ID: ${{ github.run_id }}"
+          
+          echo "📤 Pushing to artifacts branch..."
+          git push origin artifacts
+        fi
         
     - name: Update Docker Hub Link
       shell: bash -l {0}
