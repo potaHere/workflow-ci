@@ -78,35 +78,45 @@ jobs:
         # Install required packages in the conda environment
         conda env update -f conda.yaml
         conda activate avocado_ripeness_env
+        # Create a file to store the run ID
+        touch run_id.txt
         
-        # First, actually run the model training
+        # Run the model training and capture the run ID directly from the output
         echo "🚀 Training model with MLflow..."
         python modelling.py \
           --n_estimators ${{ github.event.inputs.n_estimators || '100' }} \
           --max_depth ${{ github.event.inputs.max_depth || '20' }} \
           --min_samples_split ${{ github.event.inputs.min_samples_split || '5' }} \
-          --min_samples_leaf ${{ github.event.inputs.min_samples_leaf || '2' }}
+          --min_samples_leaf ${{ github.event.inputs.min_samples_leaf || '2' }} | tee training.log
         
-        # Get the latest run ID with better error handling
-        RUN_ID=""
+        # Extract the run ID directly from the output log
+        RUN_ID=$(grep -o "Training completed! MLflow Run ID: [a-zA-Z0-9]*" training.log | cut -d ' ' -f 6)
         
-        # Method 1: Try with mlflow CLI and jq
-        if command -v mlflow >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-          RUN_ID=$(MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json 2>/dev/null | jq -r '.[0].run_id' 2>/dev/null || echo "")
+        # Verify we got a run ID
+        if [ -z "$RUN_ID" ]; then
+          echo "❌ Error: Could not find MLflow Run ID in training output!"
+          echo "📑 Training log contents:"
+          cat training.log
+          
+          # As a fallback, try with mlflow CLI and jq
+          if command -v mlflow >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+            RUN_ID=$(MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json 2>/dev/null | jq -r '.[0].run_id' 2>/dev/null || echo "")
+            
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+              echo "✅ Found Run ID via MLflow CLI: $RUN_ID"
+            else
+              echo "❌ Could not find Run ID via MLflow CLI"
+            fi
+          fi
+          
+          # If still no Run ID, exit with error
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "❌ Error: Failed to retrieve MLflow Run ID by any method"
+            exit 1
+          fi
         fi
         
-        # Method 2: Fallback to filesystem search
-        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-          echo "🔄 Fallback: Searching mlruns directory..."
-          RUN_ID=$(find mlruns -name "meta.yaml" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | awk '{print $2}' | sed 's|.*/\([^/]*\)/meta.yaml|\1|' || echo "")
-        fi
-        
-        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-          echo "❌ Error: Could not find any MLflow run ID!"
-          echo "📁 MLruns directory contents:"
-          find mlruns -type f -name "meta.yaml" 2>/dev/null | head -10
-          exit 1
-        fi
+        echo "Found MLflow Run ID: $RUN_ID"
         
         echo "Copying artifacts from run: $RUN_ID"
         
