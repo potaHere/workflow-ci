@@ -46,19 +46,32 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        
-    - name: Install Miniconda
+          - name: Install Miniconda
       uses: conda-incubator/setup-miniconda@v3
       with:
         auto-update-conda: true
         python-version: '3.10'
-        miniforge-variant: Mambaforge
-        
-    - name: Install MLflow
+        miniforge-variant: Miniforge3
+          - name: Install MLflow
       shell: bash -l {0}
       run: |
-        conda install -c conda-forge mlflow
-        pip install mlflow[extras]
+        # Update conda and install MLflow with retry mechanism
+        conda update -n base -c defaults conda -y
+        
+        # Install MLflow with retries
+        for i in {1..3}; do
+          echo "Attempt $i: Installing MLflow..."
+          if conda install -c conda-forge mlflow -y; then
+            echo "✅ MLflow installed successfully"
+            break
+          else
+            echo "❌ Attempt $i failed, retrying..."
+            sleep 10
+          fi
+        done
+        
+        # Install additional MLflow dependencies
+        pip install mlflow[extras] --retry-delay 10 --retries 3
         
     - name: Install Docker
       uses: docker/setup-buildx-action@v3
@@ -68,8 +81,7 @@ jobs:
       with:
         username: ${{ env.DOCKER_HUB_USERNAME }}
         password: ${{ env.DOCKER_HUB_PASSWORD }}
-        
-    - name: Run MLflow Project
+          - name: Run MLflow Project
       shell: bash -l {0}
       working-directory: ./MLProject
       run: |
@@ -85,41 +97,145 @@ jobs:
         echo "min_samples_split: $MIN_SAMPLES_SPLIT"
         echo "min_samples_leaf: $MIN_SAMPLES_LEAF"
         
-        # Run the MLflow project
+        # Verify dataset exists
+        if [ ! -f "avocado_ripeness_dataset_preprocessed.csv" ]; then
+          echo "❌ Error: Dataset file not found!"
+          exit 1
+        fi
+        
+        # Verify MLProject file exists
+        if [ ! -f "MLProject" ]; then
+          echo "❌ Error: MLProject file not found!"
+          exit 1
+        fi
+        
+        echo "✅ All required files present"
+        
+        # Run the MLflow project with error handling
+        echo "🚀 Starting MLflow run..."
         mlflow run . \
           -P n_estimators=$N_ESTIMATORS \
           -P max_depth=$MAX_DEPTH \
           -P min_samples_split=$MIN_SAMPLES_SPLIT \
           -P min_samples_leaf=$MIN_SAMPLES_LEAF \
-          --env-manager conda
-          
-    - name: Build Docker Image with MLflow
+          --env-manager conda || {
+            echo "❌ MLflow run failed!"
+            echo "Checking for logs..."
+            ls -la
+            if [ -d "mlruns" ]; then
+              echo "MLflow runs directory contents:"
+              find mlruns -name "*.log" -exec cat {} \; 2>/dev/null || echo "No log files found"
+            fi
+            exit 1
+          }
+        
+        echo "✅ MLflow run completed successfully"
+            - name: Build Docker Image with MLflow
       shell: bash -l {0}
       working-directory: ./MLProject
       run: |
-        # Get the latest run ID
-        RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json | jq -r '.[0].run_id')
-        echo "Latest run ID: $RUN_ID"
+        # Verify MLflow runs exist
+        if [ ! -d "mlruns" ]; then
+          echo "❌ Error: No MLflow runs found!"
+          exit 1
+        fi
         
-        # Build Docker image using mlflow build-docker
-        mlflow models build-docker \
-          -m "runs:/$RUN_ID/model" \
+        # Get the latest run ID with better error handling
+        echo "🔍 Looking for latest MLflow run..."
+        
+        # Try to get run ID using different methods
+        RUN_ID=""
+        
+        # Method 1: Try with mlflow CLI
+        if command -v mlflow >/dev/null 2>&1; then
+          RUN_ID=$(mlflow runs list --experiment-name "Avocado_Ripeness_Classification" --max-results 1 --order-by "attribute.start_time DESC" --output-format json 2>/dev/null | jq -r '.[0].run_id' 2>/dev/null || echo "")
+        fi
+        
+        # Method 2: Fallback to filesystem search if jq/mlflow failed
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "🔄 Fallback: Searching mlruns directory..."
+          # Find the most recent run directory
+          RUN_ID=$(find mlruns -name "*.yaml" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | awk '{print $2}' | sed 's|.*/\([^/]*\)/meta.yaml|\1|' || echo "")
+        fi
+        
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "❌ Error: Could not find any MLflow run ID!"
+          echo "📁 MLruns directory contents:"
+          find mlruns -type f -name "*.yaml" 2>/dev/null | head -10
+          exit 1
+        fi
+        
+        echo "✅ Latest run ID: $RUN_ID"
+        
+        # Verify model artifacts exist
+        MODEL_PATH="runs:/$RUN_ID/model"
+        echo "🔍 Checking model artifacts for run: $RUN_ID"
+        
+        # Build Docker image using mlflow build-docker with error handling
+        echo "🐳 Building Docker image..."
+        
+        if mlflow models build-docker \
+          -m "$MODEL_PATH" \
           -n "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" \
-          --enable-mlserver
+          --enable-mlserver; then
+          echo "✅ Docker image built successfully"
+        else
+          echo "❌ Docker build failed!"
+          echo "🔍 Checking model artifacts..."
           
-    - name: Tag and Push Docker Image
+          # Try to list model artifacts for debugging
+          mlflow artifacts list -u "$MODEL_PATH" 2>/dev/null || echo "Could not list model artifacts"
+          
+          # Check if model directory exists in mlruns
+          if [ -d "mlruns" ]; then
+            echo "📁 MLruns structure:"
+            find mlruns -name "model" -type d 2>/dev/null | head -5
+          fi
+          
+          exit 1
+        fi
+            - name: Tag and Push Docker Image
       shell: bash -l {0}
       run: |
-        # Tag with commit SHA
-        docker tag "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
-        
-        # Push both tags
-        docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
-        docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
-        
-        echo "Docker images pushed successfully!"
-        echo "Latest: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
-        echo "SHA: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        # Verify Docker image exists before pushing
+        if docker images | grep -q "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME"; then
+          echo "✅ Docker image found, proceeding with tag and push..."
+          
+          # Tag with commit SHA
+          docker tag "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest" "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+          
+          # Push both tags with retry mechanism
+          echo "🚀 Pushing latest tag..."
+          for i in {1..3}; do
+            if docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"; then
+              echo "✅ Latest tag pushed successfully"
+              break
+            else
+              echo "❌ Push attempt $i failed, retrying..."
+              sleep 10
+            fi
+          done
+          
+          echo "🚀 Pushing SHA tag..."
+          for i in {1..3}; do
+            if docker push "$DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"; then
+              echo "✅ SHA tag pushed successfully"
+              break
+            else
+              echo "❌ Push attempt $i failed, retrying..."
+              sleep 10
+            fi
+          done
+          
+          echo "✅ Docker images pushed successfully!"
+          echo "Latest: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:latest"
+          echo "SHA: $DOCKER_HUB_USERNAME/$DOCKER_IMAGE_NAME:${{ github.sha }}"
+        else
+          echo "❌ Docker image not found! Skipping push step."
+          echo "Available images:"
+          docker images
+          exit 1
+        fi
         
     - name: Save Model Artifacts
       shell: bash -l {0}

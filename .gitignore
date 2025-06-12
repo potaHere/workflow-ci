@@ -90,3 +90,6 @@ TROUBLESHOOTING.md
 MLProject/modelling_fixed.py
 MLProject/modelling_backup.py
 MLProject/random_forest_model.joblib
+
+# Documentation yang tidak perlu di commit
+WORKFLOW_ERROR_FIX.md
