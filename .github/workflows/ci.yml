@@ -279,7 +279,8 @@ jobs:
         
         # Logout from Docker Hub
         docker logout
-          - name: Display Run Summary
+        
+    - name: Display Run Summary
       shell: bash -l {0}
       run: |
         echo "🎉 MLflow CI/CD Pipeline Completed Successfully!"
