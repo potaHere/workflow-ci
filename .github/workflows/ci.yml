@@ -190,8 +190,7 @@ jobs:
         git fetch origin || true
         if git ls-remote --heads origin artifacts | grep -q refs/heads/artifacts; then
           echo "📁 Artifacts branch exists, checking out..."
-          git checkout artifacts
-          git pull origin artifacts
+          git checkout -B artifacts origin/artifacts
         else
           echo "🆕 Creating new artifacts branch..."
           git checkout --orphan artifacts
