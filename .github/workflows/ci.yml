@@ -115,6 +115,21 @@ jobs:
         echo "min_samples_split: $MIN_SAMPLES_SPLIT"
         echo "min_samples_leaf: $MIN_SAMPLES_LEAF"
         
+        # Clean up any existing MLflow database and runs to avoid schema conflicts
+        echo "🧹 Cleaning up existing MLflow artifacts..."
+        rm -f mlflow.db
+        rm -rf mlruns
+        
+        # Initialize MLflow tracking database with current schema
+        echo "🗄️ Initializing MLflow database..."
+        export MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+        
+        # Create and upgrade database schema
+        mlflow db upgrade sqlite:///mlflow.db
+        
+        # Verify database is properly initialized
+        echo "✅ Database initialized successfully"
+        
         # Verify dataset exists
         if [ ! -f "avocado_ripeness_dataset_preprocessed.csv" ]; then
           echo "❌ Error: Dataset file not found!"
@@ -144,6 +159,11 @@ jobs:
               echo "MLflow runs directory contents:"
               find mlruns -name "*.log" -exec cat {} \; 2>/dev/null || echo "No log files found"
             fi
+            # Additional debugging: check database state
+            echo "🔍 Database status:"
+            file mlflow.db 2>/dev/null || echo "Database file not found"
+            echo "🔍 MLflow version:"
+            mlflow --version
             exit 1
           }
         
