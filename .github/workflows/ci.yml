@@ -3,12 +3,8 @@ name: MLflow CI/CD Pipeline
 on:
   push:
     branches: [ main, master ]
-    paths:
-      - 'MLProject/**'
   pull_request:
     branches: [ main, master ]
-    paths:
-      - 'MLProject/**'
   workflow_dispatch:
     inputs:
       n_estimators:
