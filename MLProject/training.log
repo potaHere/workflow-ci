@@ -1,0 +1,26 @@
+Starting model training with parameters:
+  - n_estimators: 100
+  - max_depth: 20
+  - min_samples_split: 5
+  - min_samples_leaf: 2
+✅ Dataset loaded successfully: (250, 12)
+Features shape: (250, 11)
+Target classes: ['ripe' 'pre-conditioned' 'hard' 'breaking' 'firm-ripe']
+🚀 Training model...
+Model Parameters:
+  - n_estimators: 100
+  - max_depth: 20
+  - min_samples_split: 5
+  - min_samples_leaf: 2
+
+Model Performance:
+  - Accuracy: 1.0000
+  - Precision: 1.0000
+  - Recall: 1.0000
+  - F1 Score: 1.0000
+
+✅ Model training completed and logged to MLflow
+📊 Confusion matrix saved as 'confusion_matrix.png'
+🎯 Model registered as 'AvocadoRipenessClassifier'
+
+🎉 Training completed! MLflow Run ID: 4af4a5644ab14d729333bc3bebc77f04

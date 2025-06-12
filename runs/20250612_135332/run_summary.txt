@@ -1,0 +1,15 @@
+MLflow Run Summary
+==================
+Run ID: 4af4a5644ab14d729333bc3bebc77f04
+Timestamp: Thu Jun 12 13:53:29 UTC 2025
+Commit SHA: 5ab0eaf5f67866b93f07d9e7a72e985417fd96eb
+Docker Image: potadoc/avocado-ripeness-model:5ab0eaf5f67866b93f07d9e7a72e985417fd96eb
+MLflow Tracking URI: sqlite:////home/runner/work/workflow-ci/workflow-ci/MLProject/mlflow.db
+Generated artifacts:
+total 400
+drwxr-xr-x 3 runner docker   4096 Jun 12 13:53 .
+drwxr-xr-x 6 runner docker   4096 Jun 12 13:52 ..
+-rw-r--r-- 1 runner docker 133676 Jun 12 13:53 confusion_matrix.png
+-rw-r--r-- 1 runner docker 258048 Jun 12 13:53 mlflow.db
+drwxr-xr-x 3 runner docker   4096 Jun 12 13:53 mlruns
+-rw-r--r-- 1 runner docker    372 Jun 12 13:53 run_summary.txt
