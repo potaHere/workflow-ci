@@ -40,7 +40,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -70,6 +70,17 @@ jobs:
         
         # Create artifacts directory
         mkdir -p ../artifacts
+        
+        # Install jq for JSON parsing
+        apt-get update -qq && apt-get install -qq -y jq
+        
+        # First, actually run the model training
+        echo "🚀 Training model with MLflow..."
+        python modelling.py \
+          --n_estimators ${{ github.event.inputs.n_estimators || '100' }} \
+          --max_depth ${{ github.event.inputs.max_depth || '20' }} \
+          --min_samples_split ${{ github.event.inputs.min_samples_split || '5' }} \
+          --min_samples_leaf ${{ github.event.inputs.min_samples_leaf || '2' }}
         
         # Get the latest run ID with better error handling
         RUN_ID=""
