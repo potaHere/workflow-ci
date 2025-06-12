@@ -186,6 +186,16 @@ jobs:
           exit 1
         fi
         
+        # Backup artifacts to a temporary location before branch switch
+        echo "📦 Creating temporary backup of artifacts..."
+        mkdir -p /tmp/artifacts_backup
+        cp -r artifacts/* /tmp/artifacts_backup/ 2>/dev/null || echo "⚠️  Some artifacts backup may have failed"
+        
+        # Clean working directory to avoid conflicts
+        echo "🧹 Cleaning working directory..."
+        git clean -fd
+        git reset --hard HEAD
+        
         # Create or switch to artifacts branch
         git fetch origin || true
         if git ls-remote --heads origin artifacts | grep -q refs/heads/artifacts; then
@@ -197,17 +207,21 @@ jobs:
           git rm -rf . || true
         fi
         
-        # Copy artifacts with better error handling
-        if [ -d "artifacts" ]; then
-          cp -r artifacts/* . 2>/dev/null || echo "⚠️  Some artifacts may not have been copied"
+        # Restore artifacts from backup
+        echo "📂 Restoring artifacts from backup..."
+        if [ -d "/tmp/artifacts_backup" ]; then
+          cp -r /tmp/artifacts_backup/* . 2>/dev/null || echo "⚠️  Some artifacts may not have been restored"
         fi
         
         # Add timestamp directory
         TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
         mkdir -p "runs/$TIMESTAMP"
-        if [ -d "artifacts" ]; then
-          cp -r artifacts/* "runs/$TIMESTAMP/" 2>/dev/null || echo "⚠️  Some artifacts may not have been copied to timestamp directory"
+        if [ -d "/tmp/artifacts_backup" ]; then
+          cp -r /tmp/artifacts_backup/* "runs/$TIMESTAMP/" 2>/dev/null || echo "⚠️  Some artifacts may not have been copied to timestamp directory"
         fi
+        
+        # Clean up temporary backup
+        rm -rf /tmp/artifacts_backup || echo "⚠️  Temporary backup cleanup failed"
         
         # Stage all changes
         git add . || echo "⚠️  No changes to add"
